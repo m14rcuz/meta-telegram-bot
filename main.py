@@ -3,7 +3,6 @@ import requests
 
 ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 AD_ACCOUNT_ID = os.getenv("META_AD_ACCOUNT_ID")
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -18,12 +17,20 @@ params = {
 response = requests.get(url, params=params)
 data = response.json()
 
-for ad in data["data"]:
+# Debug naar logs
+print("META RESPONSE:", data)
 
-    ad_name = ad.get("ad_name")
+# Stop netjes als Meta een error terugstuurt
+if "error" in data:
+    print("META ERROR:", data["error"])
+    raise Exception(data["error"])
+
+ads = data.get("data", [])
+
+for ad in ads:
+    ad_name = ad.get("ad_name", "Unknown")
     spend = float(ad.get("spend", 0))
     cpm = ad.get("cpm", 0)
-
     ctr = ad.get("ctr", 0)
     cpc = ad.get("cpc", 0)
 
@@ -34,23 +41,21 @@ for ad in data["data"]:
 
     if "actions" in ad:
         for action in ad["actions"]:
-            if action["action_type"] == "add_to_cart":
-                atc = action["value"]
-            if action["action_type"] == "purchase":
-                purchases = action["value"]
+            if action.get("action_type") == "add_to_cart":
+                atc = action.get("value", 0)
+            if action.get("action_type") == "purchase":
+                purchases = action.get("value", 0)
 
     if "cost_per_action_type" in ad:
         for action in ad["cost_per_action_type"]:
-            if action["action_type"] == "purchase":
-                cpa = action["value"]
+            if action.get("action_type") == "purchase":
+                cpa = action.get("value", 0)
 
-    if "purchase_roas" in ad:
-        roas = ad["purchase_roas"][0]["value"]
+    if "purchase_roas" in ad and len(ad["purchase_roas"]) > 0:
+        roas = ad["purchase_roas"][0].get("value", 0)
 
     if spend >= 0.1:
-
-        message = f"""
-🚨 Spend Alert
+        message = f"""🚨 Spend Alert
 
 Ad: {ad_name}
 
@@ -70,5 +75,6 @@ ROAS: {roas}
         requests.post(telegram_url, data={
             "chat_id": CHAT_ID,
             "text": message
-
         })
+
+print("Script klaar zonder crash.")
