@@ -6,6 +6,7 @@ ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 AD_ACCOUNT_ID = os.getenv("META_AD_ACCOUNT_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHANNEL_CHAT_ID = os.getenv("CHANNEL_CHAT_ID")
 
 os.makedirs("/data", exist_ok=True)
 
@@ -170,13 +171,23 @@ def get_advice(threshold, ctr, cpc, cpm, atc, purchases):
 
 
 def send_telegram_message(message):
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    # privé chat
     payload = {
         "chat_id": CHAT_ID,
         "text": message
     }
-    response = requests.post(url, data=payload, timeout=30)
-    response.raise_for_status()
+    requests.post(url, data=payload, timeout=30)
+
+    # kanaal
+    if CHANNEL_CHAT_ID:
+        payload = {
+            "chat_id": CHANNEL_CHAT_ID,
+            "text": message
+        }
+        requests.post(url, data=payload, timeout=30)
 
 
 def fetch_ads():
@@ -290,6 +301,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
