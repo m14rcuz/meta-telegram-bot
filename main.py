@@ -7,8 +7,10 @@ AD_ACCOUNT_ID = os.getenv("META_AD_ACCOUNT_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+os.makedirs("/data", exist_ok=True)
+
 THRESHOLDS = [10, 20, 30]
-DB_FILE = "alerts.db"
+DB_FILE = "/data/alerts.db"
 
 
 def init_db():
@@ -246,4 +248,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
