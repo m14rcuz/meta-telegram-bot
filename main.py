@@ -23,8 +23,23 @@ def init_db():
             PRIMARY KEY (ad_id, threshold)
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ctr_history (
+            ad_id TEXT PRIMARY KEY,
+            ctr REAL
+        )
+    """)
     conn.commit()
     conn.close()
+
+
+def get_previous_ctr(ad_id):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT ctr FROM ctr_history WHERE ad_id = ?", (ad_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def alert_already_sent(ad_id, threshold):
@@ -37,6 +52,16 @@ def alert_already_sent(ad_id, threshold):
     row = cur.fetchone()
     conn.close()
     return row is not None
+
+def save_ctr(ad_id, ctr):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO ctr_history (ad_id, ctr) VALUES (?, ?)",
+        (ad_id, ctr)
+    )
+    conn.commit()
+    conn.close()
 
 
 def mark_alert_sent(ad_id, threshold):
@@ -158,7 +183,7 @@ def fetch_ads():
     url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
-        "fields": "campaign_name,ad_id,ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
+        "fields": "campaign_name,ad_id,ad_name,spend,cpm,ctr,cpc,frequency,actions,purchase_roas,cost_per_action_type",
         "access_token": ACCESS_TOKEN
     }
 
@@ -183,6 +208,10 @@ def build_message(ad, threshold):
     cpm = float(ad.get("cpm", 0) or 0)
     ctr_link = float(ad.get("ctr", 0) or 0)
     cpc_link = float(ad.get("cpc", 0) or 0)
+    frequency = float(ad.get("frequency", 0) or 0)
+    
+    previous_ctr = get_previous_ctr(ad.get("ad_id"))
+    fatigue_message = ""
 
     actions = ad.get("actions", [])
     costs = ad.get("cost_per_action_type", [])
@@ -196,6 +225,18 @@ def build_message(ad, threshold):
     ctr_icon = get_ctr_status(ctr_link)
     cpc_icon = get_cpc_status(cpc_link)
     cpm_icon = get_cpm_status(cpm)
+
+if previous_ctr and previous_ctr > 0:
+    drop = ((previous_ctr - ctr_link) / previous_ctr) * 100
+
+    if drop >= 40 and frequency >= 2:
+        fatigue_message = (
+            f"\n\n⚠️ CREATIVE FATIGUE\n\n"
+            f"Creative: {ad_name}\n"
+            f"CTR dropped {drop:.0f}%\n"
+            f"Frequency: {frequency:.1f}\n"
+            f"Recommendation: refresh creative"
+        )
 
     signal, advice_title, advice_reason = get_advice(
         threshold, ctr_link, cpc_link, cpm, atc, purchases
@@ -218,8 +259,11 @@ def build_message(ad, threshold):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{advice_title}\n"
         f"{advice_reason}"
+        f"{fatigue_message}"
     )
-
+    
+    save_ctr(ad.get("ad_id"), ctr_link)
+    
     return message
 
 
@@ -248,5 +292,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
