@@ -200,8 +200,7 @@ def fetch_ads():
     url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
-        "time_range": '{"since":"today","until":"today"}',
-        "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE"]}]',
+        "date_preset": "today",
         "fields": ",".join([
             "ad_id",
             "ad_name",
@@ -216,9 +215,10 @@ def fetch_ads():
     }
 
     response = requests.get(url, params=params, timeout=60)
+    print("REQUEST URL:", response.url)
     response.raise_for_status()
-    data = response.json()
 
+    data = response.json()
     print("META RESPONSE:", data)
 
     if "error" in data:
@@ -303,3 +303,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
