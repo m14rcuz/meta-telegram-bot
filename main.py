@@ -156,7 +156,7 @@ def fetch_ads():
     url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
-        "fields": "ad_id,ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
+        "fields": "campaign_name,ad_id,ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
         "access_token": ACCESS_TOKEN
     }
 
@@ -175,6 +175,7 @@ def fetch_ads():
 
 
 def build_message(ad, threshold):
+    campaign_name = ad.get("campaign_name", "Unknown campaign")
     ad_name = ad.get("ad_name", "Unknown ad")
     spend = float(ad.get("spend", 0) or 0)
     cpm = float(ad.get("cpm", 0) or 0)
@@ -201,6 +202,7 @@ def build_message(ad, threshold):
     message = (
         f"🚨 €{threshold} SPEND ALERT\n\n"
         f"{signal}\n\n"
+        f"📣 {campaign_name}\n"
         f"📦 {ad_name}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💰 Spend: €{spend:.2f}\n\n"
@@ -244,3 +246,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
