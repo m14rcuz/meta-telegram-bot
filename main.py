@@ -242,7 +242,7 @@ if previous_ctr and previous_ctr > 0:
         threshold, ctr_link, cpc_link, cpm, atc, purchases
     )
 
-    message = (
+           message = (
         f"🚨 €{threshold} SPEND ALERT\n\n"
         f"{signal}\n\n"
         f"📣 {campaign_name}\n"
@@ -261,9 +261,9 @@ if previous_ctr and previous_ctr > 0:
         f"{advice_reason}"
         f"{fatigue_message}"
     )
-    
+
     save_ctr(ad.get("ad_id"), ctr_link)
-    
+
     return message
 
 
@@ -292,6 +292,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
