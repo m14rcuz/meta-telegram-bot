@@ -200,26 +200,18 @@ def fetch_ads():
     url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
-        "date_preset": "today",
-        "fields": ",".join([
-            "ad_id",
-            "ad_name",
-            "spend",
-            "cpm",
-            "impressions",
-            "actions",
-            "cost_per_action_type",
-            "purchase_roas"
-        ]),
+        "fields": "ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
         "access_token": ACCESS_TOKEN
     }
 
     response = requests.get(url, params=params, timeout=60)
     print("REQUEST URL:", response.url)
+    print("STATUS CODE:", response.status_code)
+    print("RAW RESPONSE:", response.text)
+
     response.raise_for_status()
 
     data = response.json()
-    print("META RESPONSE:", data)
 
     if "error" in data:
         raise Exception(data["error"])
@@ -237,14 +229,11 @@ def build_message(ad, threshold):
     costs = ad.get("cost_per_action_type", [])
     purchase_roas = ad.get("purchase_roas", [])
 
-    link_clicks = get_action_value(actions, "link_click")
     atc = int(get_action_value(actions, "add_to_cart"))
-    purchases = int(get_action_value(actions, "purchase"))
+purchases = int(get_action_value(actions, "purchase"))
 
-    ctr_link = (link_clicks / impressions * 100) if impressions > 0 else 0.0
-    cpc_link = get_cost_value(costs, "link_click")
-    if cpc_link == 0 and link_clicks > 0:
-        cpc_link = spend / link_clicks
+ctr_link = float(ad.get("ctr", 0) or 0)
+cpc_link = float(ad.get("cpc", 0) or 0)
 
     cpa = get_cost_value(costs, "purchase")
     roas = get_roas_value(purchase_roas)
@@ -303,4 +292,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
