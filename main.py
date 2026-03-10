@@ -200,7 +200,6 @@ def fetch_ads():
 
     return data.get("data", [])
 
-
 def build_message(ad, threshold):
     campaign_name = ad.get("campaign_name", "Unknown campaign")
     ad_name = ad.get("ad_name", "Unknown ad")
@@ -209,7 +208,7 @@ def build_message(ad, threshold):
     ctr_link = float(ad.get("ctr", 0) or 0)
     cpc_link = float(ad.get("cpc", 0) or 0)
     frequency = float(ad.get("frequency", 0) or 0)
-    
+
     previous_ctr = get_previous_ctr(ad.get("ad_id"))
     fatigue_message = ""
 
@@ -226,23 +225,23 @@ def build_message(ad, threshold):
     cpc_icon = get_cpc_status(cpc_link)
     cpm_icon = get_cpm_status(cpm)
 
-if previous_ctr and previous_ctr > 0:
-    drop = ((previous_ctr - ctr_link) / previous_ctr) * 100
+    if previous_ctr and previous_ctr > 0:
+        drop = ((previous_ctr - ctr_link) / previous_ctr) * 100
 
-    if drop >= 40 and frequency >= 2:
-        fatigue_message = (
-            f"\n\n⚠️ CREATIVE FATIGUE\n\n"
-            f"Creative: {ad_name}\n"
-            f"CTR dropped {drop:.0f}%\n"
-            f"Frequency: {frequency:.1f}\n"
-            f"Recommendation: refresh creative"
-        )
+        if drop >= 40 and frequency >= 2:
+            fatigue_message = (
+                f"\n\n⚠️ CREATIVE FATIGUE\n\n"
+                f"Creative: {ad_name}\n"
+                f"CTR dropped {drop:.0f}%\n"
+                f"Frequency: {frequency:.1f}\n"
+                f"Recommendation: refresh creative"
+            )
 
     signal, advice_title, advice_reason = get_advice(
         threshold, ctr_link, cpc_link, cpm, atc, purchases
     )
 
-           message = (
+    message = (
         f"🚨 €{threshold} SPEND ALERT\n\n"
         f"{signal}\n\n"
         f"📣 {campaign_name}\n"
@@ -251,7 +250,8 @@ if previous_ctr and previous_ctr > 0:
         f"💰 Spend: €{spend:.2f}\n\n"
         f"{ctr_icon} CTR (link): {format_percent(ctr_link)}\n"
         f"{cpc_icon} CPC (link): {format_money(cpc_link)}\n"
-        f"{cpm_icon} CPM: {format_money(cpm)}\n\n"
+        f"{cpm_icon} CPM: {format_money(cpm)}\n"
+        f"🔁 Frequency: {frequency:.1f}\n\n"
         f"🛒 ATC: {atc}\n"
         f"🛍️ Purchases: {purchases}\n"
         f"💸 CPA: {format_money(cpa)}\n"
@@ -263,9 +263,7 @@ if previous_ctr and previous_ctr > 0:
     )
 
     save_ctr(ad.get("ad_id"), ctr_link)
-
     return message
-
 
 def main():
     if not all([ACCESS_TOKEN, AD_ACCOUNT_ID, TELEGRAM_TOKEN, CHAT_ID]):
@@ -292,6 +290,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
