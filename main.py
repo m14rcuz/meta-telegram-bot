@@ -60,6 +60,15 @@ def get_action_value(actions, action_type):
     return 0.0
 
 
+def get_roas_value(purchase_roas):
+    if not purchase_roas:
+        return 0.0
+    try:
+        return float(purchase_roas[0].get("value", 0))
+    except (TypeError, ValueError, IndexError, KeyError):
+        return 0.0
+
+
 def get_cost_value(costs, action_type):
     if not costs:
         return 0.0
@@ -72,17 +81,8 @@ def get_cost_value(costs, action_type):
     return 0.0
 
 
-def get_roas_value(purchase_roas):
-    if not purchase_roas:
-        return 0.0
-    try:
-        return float(purchase_roas[0].get("value", 0))
-    except (TypeError, ValueError, IndexError, KeyError):
-        return 0.0
-
-
 def format_money(value):
-    if value is None or value == 0:
+    if not value:
         return "-"
     return f"€{value:.2f}"
 
@@ -94,7 +94,7 @@ def format_percent(value):
 def get_ctr_status(ctr):
     if ctr < 1.5:
         return "🔴"
-    elif ctr < 2.5:
+    if ctr < 2.5:
         return "🟠"
     return "🟢"
 
@@ -102,7 +102,7 @@ def get_ctr_status(ctr):
 def get_cpc_status(cpc):
     if cpc >= 0.75:
         return "🔴"
-    elif cpc > 0.45:
+    if cpc > 0.45:
         return "🟠"
     return "🟢"
 
@@ -110,7 +110,7 @@ def get_cpc_status(cpc):
 def get_cpm_status(cpm):
     if cpm >= 10:
         return "🔴"
-    elif cpm > 6:
+    if cpm > 6:
         return "🟠"
     return "🟢"
 
@@ -118,72 +118,28 @@ def get_cpm_status(cpm):
 def get_advice(threshold, ctr, cpc, cpm, atc, purchases):
     if threshold == 10:
         if ctr < 1.5:
-            return (
-                "❌ KILL",
-                "❌ Advice: KILL",
-                "Reason: CTR below 1.5% after ~€10 spend"
-            )
+            return "❌ KILL", "❌ Advice: KILL", "Reason: CTR below 1.5% after ~€10 spend"
         if cpc >= 0.75:
-            return (
-                "❌ KILL",
-                "❌ Advice: KILL",
-                "Reason: CPC is €0.75+"
-            )
+            return "❌ KILL", "❌ Advice: KILL", "Reason: CPC is €0.75+"
         if cpm >= 10 and ctr < 1.5:
-            return (
-                "❌ KILL",
-                "❌ Advice: KILL",
-                "Reason: high CPM and low CTR"
-            )
+            return "❌ KILL", "❌ Advice: KILL", "Reason: high CPM and low CTR"
         if ctr >= 4:
-            return (
-                "🔥 WINNER",
-                "✅ Advice: KEEP RUNNING",
-                "Reason: CTR above 4%"
-            )
+            return "🔥 WINNER", "✅ Advice: KEEP RUNNING", "Reason: CTR above 4%"
         if ctr >= 2.5 and cpc <= 0.45 and cpm <= 6:
-            return (
-                "🔥 WINNER",
-                "✅ Advice: KEEP RUNNING",
-                "Reason: strong early metrics"
-            )
-        return (
-            "👀 WATCH",
-            "👀 Advice: WATCH",
-            "Reason: mixed early metrics"
-        )
+            return "🔥 WINNER", "✅ Advice: KEEP RUNNING", "Reason: strong early metrics"
+        return "👀 WATCH", "👀 Advice: WATCH", "Reason: mixed early metrics"
 
     if threshold == 20:
         if atc == 0:
-            return (
-                "❌ KILL",
-                "❌ Advice: KILL",
-                "Reason: €20 spend and no ATC"
-            )
-        return (
-            "👀 WATCH",
-            "✅ Advice: KEEP RUNNING",
-            "Reason: ATC found before €20"
-        )
+            return "❌ KILL", "❌ Advice: KILL", "Reason: €20 spend and no ATC"
+        return "👀 WATCH", "✅ Advice: KEEP RUNNING", "Reason: ATC found before €20"
 
     if threshold == 30:
         if purchases == 0:
-            return (
-                "❌ KILL",
-                "❌ Advice: KILL",
-                "Reason: €30 spend and no Purchase"
-            )
-        return (
-            "🔥 WINNER",
-            "✅ Advice: KEEP RUNNING",
-            "Reason: Purchase found before €30"
-        )
+            return "❌ KILL", "❌ Advice: KILL", "Reason: €30 spend and no Purchase"
+        return "🔥 WINNER", "✅ Advice: KEEP RUNNING", "Reason: Purchase found before €30"
 
-    return (
-        "👀 WATCH",
-        "👀 Advice: WATCH",
-        "Reason: no clear signal"
-    )
+    return "👀 WATCH", "👀 Advice: WATCH", "Reason: no clear signal"
 
 
 def send_telegram_message(message):
@@ -200,7 +156,7 @@ def fetch_ads():
     url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
-        "fields": "ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
+        "fields": "ad_id,ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
         "access_token": ACCESS_TOKEN
     }
 
@@ -212,7 +168,6 @@ def fetch_ads():
     response.raise_for_status()
 
     data = response.json()
-
     if "error" in data:
         raise Exception(data["error"])
 
@@ -221,20 +176,17 @@ def fetch_ads():
 
 def build_message(ad, threshold):
     ad_name = ad.get("ad_name", "Unknown ad")
-    spend = float(ad.get("spend", 0))
+    spend = float(ad.get("spend", 0) or 0)
     cpm = float(ad.get("cpm", 0) or 0)
-    impressions = float(ad.get("impressions", 0) or 0)
+    ctr_link = float(ad.get("ctr", 0) or 0)
+    cpc_link = float(ad.get("cpc", 0) or 0)
 
     actions = ad.get("actions", [])
     costs = ad.get("cost_per_action_type", [])
     purchase_roas = ad.get("purchase_roas", [])
 
     atc = int(get_action_value(actions, "add_to_cart"))
-purchases = int(get_action_value(actions, "purchase"))
-
-ctr_link = float(ad.get("ctr", 0) or 0)
-cpc_link = float(ad.get("cpc", 0) or 0)
-
+    purchases = int(get_action_value(actions, "purchase"))
     cpa = get_cost_value(costs, "purchase")
     roas = get_roas_value(purchase_roas)
 
@@ -279,7 +231,7 @@ def main():
         if not ad_id:
             continue
 
-        spend = float(ad.get("spend", 0))
+        spend = float(ad.get("spend", 0) or 0)
 
         for threshold in THRESHOLDS:
             if spend >= threshold and not alert_already_sent(ad_id, threshold):
@@ -292,5 +244,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
