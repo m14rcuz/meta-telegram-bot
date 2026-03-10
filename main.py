@@ -47,7 +47,7 @@ for ad in data["data"]:
     if "purchase_roas" in ad:
         roas = ad["purchase_roas"][0]["value"]
 
-    if spend >= 10:
+    if spend >= 0.1:
 
         message = f"""
 🚨 Spend Alert
@@ -70,4 +70,5 @@ ROAS: {roas}
         requests.post(telegram_url, data={
             "chat_id": CHAT_ID,
             "text": message
+
         })
