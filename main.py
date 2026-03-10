@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import requests
 
 ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
@@ -6,75 +7,299 @@ AD_ACCOUNT_ID = os.getenv("META_AD_ACCOUNT_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
+THRESHOLDS = [10, 20, 30]
+DB_FILE = "alerts.db"
 
-params = {
-    "level": "ad",
-    "fields": "ad_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
-    "access_token": ACCESS_TOKEN
-}
 
-response = requests.get(url, params=params)
-data = response.json()
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sent_alerts (
+            ad_id TEXT NOT NULL,
+            threshold INTEGER NOT NULL,
+            PRIMARY KEY (ad_id, threshold)
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-# Debug naar logs
-print("META RESPONSE:", data)
 
-# Stop netjes als Meta een error terugstuurt
-if "error" in data:
-    print("META ERROR:", data["error"])
-    raise Exception(data["error"])
+def alert_already_sent(ad_id, threshold):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM sent_alerts WHERE ad_id = ? AND threshold = ?",
+        (ad_id, threshold)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
 
-ads = data.get("data", [])
 
-for ad in ads:
-    ad_name = ad.get("ad_name", "Unknown")
+def mark_alert_sent(ad_id, threshold):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO sent_alerts (ad_id, threshold) VALUES (?, ?)",
+        (ad_id, threshold)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_action_value(actions, action_type):
+    if not actions:
+        return 0.0
+    for action in actions:
+        if action.get("action_type") == action_type:
+            try:
+                return float(action.get("value", 0))
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def get_cost_value(costs, action_type):
+    if not costs:
+        return 0.0
+    for item in costs:
+        if item.get("action_type") == action_type:
+            try:
+                return float(item.get("value", 0))
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def get_roas_value(purchase_roas):
+    if not purchase_roas:
+        return 0.0
+    try:
+        return float(purchase_roas[0].get("value", 0))
+    except (TypeError, ValueError, IndexError, KeyError):
+        return 0.0
+
+
+def format_money(value):
+    if value is None or value == 0:
+        return "-"
+    return f"€{value:.2f}"
+
+
+def format_percent(value):
+    return f"{value:.2f}%"
+
+
+def get_ctr_status(ctr):
+    if ctr < 1.5:
+        return "🔴"
+    elif ctr < 2.5:
+        return "🟠"
+    return "🟢"
+
+
+def get_cpc_status(cpc):
+    if cpc >= 0.75:
+        return "🔴"
+    elif cpc > 0.45:
+        return "🟠"
+    return "🟢"
+
+
+def get_cpm_status(cpm):
+    if cpm >= 10:
+        return "🔴"
+    elif cpm > 6:
+        return "🟠"
+    return "🟢"
+
+
+def get_advice(threshold, ctr, cpc, cpm, atc, purchases):
+    if threshold == 10:
+        if ctr < 1.5:
+            return (
+                "❌ KILL",
+                "❌ Advice: KILL",
+                "Reason: CTR below 1.5% after ~€10 spend"
+            )
+        if cpc >= 0.75:
+            return (
+                "❌ KILL",
+                "❌ Advice: KILL",
+                "Reason: CPC is €0.75+"
+            )
+        if cpm >= 10 and ctr < 1.5:
+            return (
+                "❌ KILL",
+                "❌ Advice: KILL",
+                "Reason: high CPM and low CTR"
+            )
+        if ctr >= 4:
+            return (
+                "🔥 WINNER",
+                "✅ Advice: KEEP RUNNING",
+                "Reason: CTR above 4%"
+            )
+        if ctr >= 2.5 and cpc <= 0.45 and cpm <= 6:
+            return (
+                "🔥 WINNER",
+                "✅ Advice: KEEP RUNNING",
+                "Reason: strong early metrics"
+            )
+        return (
+            "👀 WATCH",
+            "👀 Advice: WATCH",
+            "Reason: mixed early metrics"
+        )
+
+    if threshold == 20:
+        if atc == 0:
+            return (
+                "❌ KILL",
+                "❌ Advice: KILL",
+                "Reason: €20 spend and no ATC"
+            )
+        return (
+            "👀 WATCH",
+            "✅ Advice: KEEP RUNNING",
+            "Reason: ATC found before €20"
+        )
+
+    if threshold == 30:
+        if purchases == 0:
+            return (
+                "❌ KILL",
+                "❌ Advice: KILL",
+                "Reason: €30 spend and no Purchase"
+            )
+        return (
+            "🔥 WINNER",
+            "✅ Advice: KEEP RUNNING",
+            "Reason: Purchase found before €30"
+        )
+
+    return (
+        "👀 WATCH",
+        "👀 Advice: WATCH",
+        "Reason: no clear signal"
+    )
+
+
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+    response = requests.post(url, data=payload, timeout=30)
+    response.raise_for_status()
+
+
+def fetch_ads():
+    url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
+    params = {
+        "level": "ad",
+        "time_range": '{"since":"today","until":"today"}',
+        "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE"]}]',
+        "fields": ",".join([
+            "ad_id",
+            "ad_name",
+            "spend",
+            "cpm",
+            "impressions",
+            "actions",
+            "cost_per_action_type",
+            "purchase_roas"
+        ]),
+        "access_token": ACCESS_TOKEN
+    }
+
+    response = requests.get(url, params=params, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+
+    print("META RESPONSE:", data)
+
+    if "error" in data:
+        raise Exception(data["error"])
+
+    return data.get("data", [])
+
+
+def build_message(ad, threshold):
+    ad_name = ad.get("ad_name", "Unknown ad")
     spend = float(ad.get("spend", 0))
-    cpm = ad.get("cpm", 0)
-    ctr = ad.get("ctr", 0)
-    cpc = ad.get("cpc", 0)
+    cpm = float(ad.get("cpm", 0) or 0)
+    impressions = float(ad.get("impressions", 0) or 0)
 
-    purchases = 0
-    atc = 0
-    cpa = 0
-    roas = 0
+    actions = ad.get("actions", [])
+    costs = ad.get("cost_per_action_type", [])
+    purchase_roas = ad.get("purchase_roas", [])
 
-    if "actions" in ad:
-        for action in ad["actions"]:
-            if action.get("action_type") == "add_to_cart":
-                atc = action.get("value", 0)
-            if action.get("action_type") == "purchase":
-                purchases = action.get("value", 0)
+    link_clicks = get_action_value(actions, "link_click")
+    atc = int(get_action_value(actions, "add_to_cart"))
+    purchases = int(get_action_value(actions, "purchase"))
 
-    if "cost_per_action_type" in ad:
-        for action in ad["cost_per_action_type"]:
-            if action.get("action_type") == "purchase":
-                cpa = action.get("value", 0)
+    ctr_link = (link_clicks / impressions * 100) if impressions > 0 else 0.0
+    cpc_link = get_cost_value(costs, "link_click")
+    if cpc_link == 0 and link_clicks > 0:
+        cpc_link = spend / link_clicks
 
-    if "purchase_roas" in ad and len(ad["purchase_roas"]) > 0:
-        roas = ad["purchase_roas"][0].get("value", 0)
+    cpa = get_cost_value(costs, "purchase")
+    roas = get_roas_value(purchase_roas)
 
-    if spend >= 0.1:
-        message = f"""🚨 Spend Alert
+    ctr_icon = get_ctr_status(ctr_link)
+    cpc_icon = get_cpc_status(cpc_link)
+    cpm_icon = get_cpm_status(cpm)
 
-Ad: {ad_name}
+    signal, advice_title, advice_reason = get_advice(
+        threshold, ctr_link, cpc_link, cpm, atc, purchases
+    )
 
-Spend: €{spend}
-CTR (link): {ctr}
-CPC (link): €{cpc}
-CPM: €{cpm}
+    message = (
+        f"🚨 €{threshold} SPEND ALERT\n\n"
+        f"{signal}\n\n"
+        f"📦 {ad_name}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Spend: €{spend:.2f}\n\n"
+        f"{ctr_icon} CTR (link): {format_percent(ctr_link)}\n"
+        f"{cpc_icon} CPC (link): {format_money(cpc_link)}\n"
+        f"{cpm_icon} CPM: {format_money(cpm)}\n\n"
+        f"🛒 ATC: {atc}\n"
+        f"🛍️ Purchases: {purchases}\n"
+        f"💸 CPA: {format_money(cpa)}\n"
+        f"📊 ROAS: {'-' if roas == 0 else f'{roas:.2f}'}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{advice_title}\n"
+        f"{advice_reason}"
+    )
 
-ATC: {atc}
-Purchases: {purchases}
-CPA: €{cpa}
-ROAS: {roas}
-"""
+    return message
 
-        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-        requests.post(telegram_url, data={
-            "chat_id": CHAT_ID,
-            "text": message
-        })
+def main():
+    if not all([ACCESS_TOKEN, AD_ACCOUNT_ID, TELEGRAM_TOKEN, CHAT_ID]):
+        raise ValueError("One or more environment variables are missing.")
 
-print("Script klaar zonder crash.")
+    init_db()
+    ads = fetch_ads()
+
+    for ad in ads:
+        ad_id = ad.get("ad_id")
+        if not ad_id:
+            continue
+
+        spend = float(ad.get("spend", 0))
+
+        for threshold in THRESHOLDS:
+            if spend >= threshold and not alert_already_sent(ad_id, threshold):
+                message = build_message(ad, threshold)
+                send_telegram_message(message)
+                mark_alert_sent(ad_id, threshold)
+
+    print("Script klaar.")
+
+
+if __name__ == "__main__":
+    main()
