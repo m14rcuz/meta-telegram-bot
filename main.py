@@ -194,6 +194,7 @@ def fetch_ads():
     url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
+        "date_preset": "today",
         "fields": "campaign_name,ad_id,ad_name,spend,cpm,ctr,cpc,frequency,actions,purchase_roas,cost_per_action_type",
         "access_token": ACCESS_TOKEN
     }
@@ -301,6 +302,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
