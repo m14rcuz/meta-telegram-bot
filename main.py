@@ -285,6 +285,8 @@ def main():
     ads = fetch_ads()
 
     for ad in ads:
+        print("AD FOUND:", ad.get("campaign_name"), "|", ad.get("ad_name"), "| ad_id:", ad.get("ad_id"), "| spend:", ad.get("spend"))
+        
         ad_id = ad.get("ad_id")
         if not ad_id:
             continue
