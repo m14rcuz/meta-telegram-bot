@@ -17,19 +17,29 @@ DB_FILE = "/data/alerts.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
+
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS sent_alerts (
-            ad_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS sent_campaign_alerts (
+            campaign_name TEXT NOT NULL,
             threshold INTEGER NOT NULL,
-            PRIMARY KEY (ad_id, threshold)
+            PRIMARY KEY (campaign_name, threshold)
         )
     """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ctr_history (
             ad_id TEXT PRIMARY KEY,
             ctr REAL
         )
     """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sent_fatigue_alerts (
+            ad_id TEXT PRIMARY KEY,
+            last_drop REAL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -40,19 +50,8 @@ def get_previous_ctr(ad_id):
     cur.execute("SELECT ctr FROM ctr_history WHERE ad_id = ?", (ad_id,))
     row = cur.fetchone()
     conn.close()
-    return row[0] if row else None
+    return float(row[0]) if row else None
 
-
-def alert_already_sent(ad_id, threshold):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT 1 FROM sent_alerts WHERE ad_id = ? AND threshold = ?",
-        (ad_id, threshold)
-    )
-    row = cur.fetchone()
-    conn.close()
-    return row is not None
 
 def save_ctr(ad_id, ctr):
     conn = sqlite3.connect(DB_FILE)
@@ -65,12 +64,47 @@ def save_ctr(ad_id, ctr):
     conn.close()
 
 
-def mark_alert_sent(ad_id, threshold):
+def campaign_alert_already_sent(campaign_name, threshold):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute(
-        "INSERT OR IGNORE INTO sent_alerts (ad_id, threshold) VALUES (?, ?)",
-        (ad_id, threshold)
+        "SELECT 1 FROM sent_campaign_alerts WHERE campaign_name = ? AND threshold = ?",
+        (campaign_name, threshold)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def mark_campaign_alert_sent(campaign_name, threshold):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO sent_campaign_alerts (campaign_name, threshold) VALUES (?, ?)",
+        (campaign_name, threshold)
+    )
+    conn.commit()
+    conn.close()
+
+
+def fatigue_alert_already_sent(ad_id):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM sent_fatigue_alerts WHERE ad_id = ?",
+        (ad_id,)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def mark_fatigue_alert_sent(ad_id, drop):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO sent_fatigue_alerts (ad_id, last_drop) VALUES (?, ?)",
+        (ad_id, drop)
     )
     conn.commit()
     conn.close()
@@ -171,23 +205,43 @@ def get_advice(threshold, ctr, cpc, cpm, atc, purchases):
 
 
 def send_telegram_message(message):
-
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    # privé chat
-    payload = {
+    private_payload = {
         "chat_id": CHAT_ID,
         "text": message
     }
-    requests.post(url, data=payload, timeout=30)
+    requests.post(url, data=private_payload, timeout=30)
 
-    # kanaal
     if CHANNEL_CHAT_ID:
-        payload = {
+        channel_payload = {
             "chat_id": CHANNEL_CHAT_ID,
             "text": message
         }
-        requests.post(url, data=payload, timeout=30)
+        requests.post(url, data=channel_payload, timeout=30)
+
+
+def fetch_campaigns():
+    url = f"https://graph.facebook.com/v19.0/{AD_ACCOUNT_ID}/insights"
+    params = {
+        "level": "campaign",
+        "date_preset": "today",
+        "fields": "campaign_name,spend,cpm,ctr,cpc,actions,purchase_roas,cost_per_action_type",
+        "access_token": ACCESS_TOKEN
+    }
+
+    response = requests.get(url, params=params, timeout=60)
+    print("CAMPAIGN REQUEST URL:", response.url)
+    print("CAMPAIGN STATUS CODE:", response.status_code)
+    print("CAMPAIGN RAW RESPONSE:", response.text)
+
+    response.raise_for_status()
+
+    data = response.json()
+    if "error" in data:
+        raise Exception(data["error"])
+
+    return data.get("data", [])
 
 
 def fetch_ads():
@@ -200,9 +254,9 @@ def fetch_ads():
     }
 
     response = requests.get(url, params=params, timeout=60)
-    print("REQUEST URL:", response.url)
-    print("STATUS CODE:", response.status_code)
-    print("RAW RESPONSE:", response.text)
+    print("AD REQUEST URL:", response.url)
+    print("AD STATUS CODE:", response.status_code)
+    print("AD RAW RESPONSE:", response.text)
 
     response.raise_for_status()
 
@@ -212,58 +266,40 @@ def fetch_ads():
 
     return data.get("data", [])
 
-def build_message(ad, threshold):
-    campaign_name = ad.get("campaign_name", "Unknown campaign")
-    ad_name = ad.get("ad_name", "Unknown ad")
-    spend = float(ad.get("spend", 0) or 0)
-    cpm = float(ad.get("cpm", 0) or 0)
-    ctr_link = float(ad.get("ctr", 0) or 0)
-    cpc_link = float(ad.get("cpc", 0) or 0)
-    frequency = float(ad.get("frequency", 0) or 0)
 
-    previous_ctr = get_previous_ctr(ad.get("ad_id"))
-    fatigue_message = ""
+def build_campaign_message(campaign, threshold):
+    campaign_name = campaign.get("campaign_name", "Unknown campaign")
+    spend = float(campaign.get("spend", 0) or 0)
+    cpm = float(campaign.get("cpm", 0) or 0)
+    ctr = float(campaign.get("ctr", 0) or 0)
+    cpc = float(campaign.get("cpc", 0) or 0)
 
-    actions = ad.get("actions", [])
-    costs = ad.get("cost_per_action_type", [])
-    purchase_roas = ad.get("purchase_roas", [])
+    actions = campaign.get("actions", [])
+    costs = campaign.get("cost_per_action_type", [])
+    purchase_roas = campaign.get("purchase_roas", [])
 
     atc = int(get_action_value(actions, "add_to_cart"))
     purchases = int(get_action_value(actions, "purchase"))
     cpa = get_cost_value(costs, "purchase")
     roas = get_roas_value(purchase_roas)
 
-    ctr_icon = get_ctr_status(ctr_link)
-    cpc_icon = get_cpc_status(cpc_link)
+    ctr_icon = get_ctr_status(ctr)
+    cpc_icon = get_cpc_status(cpc)
     cpm_icon = get_cpm_status(cpm)
 
-    if previous_ctr and previous_ctr > 0:
-        drop = ((previous_ctr - ctr_link) / previous_ctr) * 100
-
-        if drop >= 40 and frequency >= 2:
-            fatigue_message = (
-                f"\n\n⚠️ CREATIVE FATIGUE\n\n"
-                f"Creative: {ad_name}\n"
-                f"CTR dropped {drop:.0f}%\n"
-                f"Frequency: {frequency:.1f}\n"
-                f"Recommendation: refresh creative"
-            )
-
     signal, advice_title, advice_reason = get_advice(
-        threshold, ctr_link, cpc_link, cpm, atc, purchases
+        threshold, ctr, cpc, cpm, atc, purchases
     )
 
     message = (
-        f"🚨 €{threshold} SPEND ALERT\n\n"
+        f"🚨 €{threshold} CAMPAIGN SPEND ALERT\n\n"
         f"{signal}\n\n"
         f"📣 {campaign_name}\n"
-        f"📦 {ad_name}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💰 Spend: €{spend:.2f}\n\n"
-        f"{ctr_icon} CTR (link): {format_percent(ctr_link)}\n"
-        f"{cpc_icon} CPC (link): {format_money(cpc_link)}\n"
-        f"{cpm_icon} CPM: {format_money(cpm)}\n"
-        f"🔁 Frequency: {frequency:.1f}\n\n"
+        f"{ctr_icon} CTR (link): {format_percent(ctr)}\n"
+        f"{cpc_icon} CPC (link): {format_money(cpc)}\n"
+        f"{cpm_icon} CPM: {format_money(cpm)}\n\n"
         f"🛒 ATC: {atc}\n"
         f"🛍️ Purchases: {purchases}\n"
         f"💸 CPA: {format_money(cpa)}\n"
@@ -271,43 +307,75 @@ def build_message(ad, threshold):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{advice_title}\n"
         f"{advice_reason}"
-        f"{fatigue_message}"
     )
 
-    save_ctr(ad.get("ad_id"), ctr_link)
     return message
+
+
+def build_fatigue_message(ad, drop):
+    campaign_name = ad.get("campaign_name", "Unknown campaign")
+    ad_name = ad.get("ad_name", "Unknown ad")
+    frequency = float(ad.get("frequency", 0) or 0)
+
+    return (
+        f"⚠️ CREATIVE FATIGUE\n\n"
+        f"📣 {campaign_name}\n"
+        f"Creative: {ad_name}\n"
+        f"CTR dropped {drop:.0f}%\n"
+        f"Frequency: {frequency:.1f}\n"
+        f"Recommendation: refresh creative"
+    )
+
 
 def main():
     if not all([ACCESS_TOKEN, AD_ACCOUNT_ID, TELEGRAM_TOKEN, CHAT_ID]):
         raise ValueError("One or more environment variables are missing.")
 
     init_db()
+
+    campaigns = fetch_campaigns()
     ads = fetch_ads()
 
+    # Campaign spend alerts
+    for campaign in campaigns:
+        print("CAMPAIGN FOUND:", campaign.get("campaign_name"), "| spend:", campaign.get("spend"))
+
+        campaign_name = campaign.get("campaign_name")
+        if not campaign_name:
+            continue
+
+        spend = float(campaign.get("spend", 0) or 0)
+
+        for threshold in THRESHOLDS:
+            if spend >= threshold and not campaign_alert_already_sent(campaign_name, threshold):
+                message = build_campaign_message(campaign, threshold)
+                send_telegram_message(message)
+                mark_campaign_alert_sent(campaign_name, threshold)
+
+    # Ad-level fatigue alerts
     for ad in ads:
         print("AD FOUND:", ad.get("campaign_name"), "|", ad.get("ad_name"), "| ad_id:", ad.get("ad_id"), "| spend:", ad.get("spend"))
-        
+
         ad_id = ad.get("ad_id")
         if not ad_id:
             continue
 
-        spend = float(ad.get("spend", 0) or 0)
+        ctr_link = float(ad.get("ctr", 0) or 0)
+        frequency = float(ad.get("frequency", 0) or 0)
+        previous_ctr = get_previous_ctr(ad_id)
 
-        for threshold in THRESHOLDS:
-            if spend >= threshold and not alert_already_sent(ad_id, threshold):
-                message = build_message(ad, threshold)
-                send_telegram_message(message)
-                mark_alert_sent(ad_id, threshold)
+        if previous_ctr and previous_ctr > 0:
+            drop = ((previous_ctr - ctr_link) / previous_ctr) * 100
+
+            if drop >= 40 and frequency >= 2 and not fatigue_alert_already_sent(ad_id):
+                fatigue_message = build_fatigue_message(ad, drop)
+                send_telegram_message(fatigue_message)
+                mark_fatigue_alert_sent(ad_id, drop)
+
+        save_ctr(ad_id, ctr_link)
 
     print("Script klaar.")
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
